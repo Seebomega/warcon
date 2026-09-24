@@ -444,6 +444,10 @@ export interface DossierView {
 		deaths: number;
 		/** total cash earned across the visible servers */
 		cash: number;
+		/** longest interval between recorded life boundaries on feed-tracked sessions */
+		longestAliveSeconds: number | null;
+		/** unspent progress for this server's active seeding reward */
+		seedReward: { minutes: number; requiredMinutes: number } | null;
 		firstSeen: string | null;
 		lastSeen: string | null;
 	};
