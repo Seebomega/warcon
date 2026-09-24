@@ -163,6 +163,7 @@ import {
 	type PlayerStats,
 	type StatsBy
 } from './message-vars';
+import { seedProgress } from './seed-progress';
 
 export * from './trigger-rules';
 
@@ -1497,9 +1498,8 @@ function evalMatchBroadcast(
 }
 
 // A seeding rule adds up seed time once a minute per server while the server is low, not per
-// observation: the open sessions from memory, the closed ones in the window from the database.
-// Above the threshold nobody is earning, so nothing is checked; the fleet's busy servers cost
-// nothing here.
+// observation. Historical session totals stay intact; the trigger state keeps each player's
+// unspent reward balance and resets that balance when it queues a grant.
 const SEED_CHECK_MS = 60_000;
 const seedState = new Map<string, { checkedAt: number; low: boolean; full: boolean }>();
 
@@ -1528,44 +1528,67 @@ async function evalSeedReward(
 		: cfg.untilFull
 			? full && !state.full
 			: state.low;
-	seedState.set(row.id, { checkedAt: due ? now : state.checkedAt, low, full });
+	state.checkedAt = due ? now : state.checkedAt;
+	state.low = low;
+	state.full = full;
+	seedState.set(row.id, state);
 	if (!due) return;
-	const candidates = ctx.players.filter((p) => !ctx.reserved.has(p.steamId));
-	if (!candidates.length) return;
 	const from = new Date(now - cfg.windowDays * 86400_000);
+	const progress = seedProgress(row.state);
+	for (const [steamId, p] of Object.entries(progress.players))
+		if (p.seenAt < from.getTime()) delete progress.players[steamId];
+	if (!ctx.players.length) {
+		row.state = progress;
+		out.updates.push({ id: row.id, state: progress });
+		return;
+	}
 	const closed = await env.db
-		.select({ steamId: playerSessions.steamId, seconds: sql<number>`SUM(seed_seconds)::int` })
+		.select({
+			steamId: playerSessions.steamId,
+			windowSeconds: sql<number>`COALESCE(SUM(${playerSessions.seedSeconds}) FILTER (WHERE ${playerSessions.lastSeen} >= ${from}), 0)::int`,
+			totalSeconds: sql<number>`COALESCE(SUM(${playerSessions.seedSeconds}), 0)::bigint`
+		})
 		.from(playerSessions)
 		.where(
 			and(
 				eq(playerSessions.serverId, ctx.server.id),
 				inArray(
 					playerSessions.steamId,
-					candidates.map((p) => p.steamId)
+					ctx.players.map((p) => p.steamId)
 				),
-				isNotNull(playerSessions.leftAt),
-				gte(playerSessions.leftAt, from),
-				gte(playerSessions.lastSeen, from)
+				isNotNull(playerSessions.leftAt)
 			)
 		)
 		.groupBy(playerSessions.steamId);
-	const earlier = new Map(closed.map((r) => [r.steamId, r.seconds]));
+	const history = new Map(closed.map((r) => [r.steamId, r]));
 	// The whisper names this date; the entry's own expiry is set when the grant is delivered.
 	const expiresAt = new Date(now + cfg.slotDays * 86400_000);
-	const earned = candidates
-		.map((p) => ({
-			p,
-			seconds: (earlier.get(p.steamId) ?? 0) + Math.floor((ctx.seedMs.get(p.steamId) ?? 0) / 1000)
-		}))
-		.filter((e) => e.seconds >= cfg.minutes * 60);
+	const rewards: { p: Player; balance: number }[] = [];
+	for (const p of ctx.players) {
+		const openSeconds = Math.floor((ctx.seedMs.get(p.steamId) ?? 0) / 1000);
+		const historyRow = history.get(p.steamId);
+		const total = Number(historyRow?.totalSeconds ?? 0) + openSeconds;
+		const previous = progress.players[p.steamId];
+		const balance = previous
+			? previous.balance + Math.max(0, total - previous.observed)
+			: Number(historyRow?.windowSeconds ?? 0) + openSeconds;
+		const qualified = balance >= cfg.minutes * 60;
+		const eligible = !ctx.reserved.has(p.steamId) || cfg.replaceExisting;
+		progress.players[p.steamId] = {
+			observed: total,
+			balance: qualified && eligible ? 0 : balance,
+			seenAt: now
+		};
+		if (qualified && eligible) rewards.push({ p, balance });
+	}
 	const stats = await statsFor(
 		read,
-		cfg.message ? earned.map((e) => ({ steamId: e.p.steamId, text: cfg.message })) : []
+		cfg.message ? rewards.map((e) => ({ steamId: e.p.steamId, text: cfg.message })) : []
 	);
 	let n = 0;
 	let last = '';
-	for (const { p, seconds } of earned) {
-		const minutes = Math.floor(seconds / 60);
+	for (const { p, balance } of rewards) {
+		const minutes = Math.floor(balance / 60);
 		const reason = `Seeded ${ctx.server.name}: ${minutes} min with ${cfg.lowAt} or fewer on`;
 		out.intents.push({
 			trigger: row,
@@ -1575,7 +1598,8 @@ async function evalSeedReward(
 				name: p.name,
 				reason,
 				slotDays: cfg.slotDays,
-				scope: cfg.scope === 'server' ? 'server' : 'org'
+				scope: cfg.scope === 'server' ? 'server' : 'org',
+				replaceExisting: cfg.replaceExisting
 			},
 			target: p.steamId,
 			okMessage: `Reserved a slot for ${p.name}.`,
@@ -1608,12 +1632,13 @@ async function evalSeedReward(
 		n++;
 		last = p.name;
 	}
-	if (n)
-		out.updates.push({
-			id: row.id,
-			lastFiredAt: ctx.ts,
-			lastResult: `Reserving a slot for ${n === 1 ? last : `${n} players`}`
-		});
+	row.state = progress;
+	out.updates.push({
+		id: row.id,
+		state: progress,
+		lastFiredAt: n ? ctx.ts : undefined,
+		lastResult: n ? `Reserving a slot for ${n === 1 ? last : `${n} players`}` : undefined
+	});
 }
 
 /**
@@ -2304,14 +2329,14 @@ export async function dryRun(
 			.sort((a, b) => a[1].crossedAt! - b[1].crossedAt!);
 		let held = 0;
 		for (const [steamId, t] of crossed) {
-			if (reserved.has(steamId)) {
+			if (reserved.has(steamId) && !c.replaceExisting) {
 				held++;
 				continue;
 			}
 			const at = new Date(t.crossedAt!);
 			push(
 				at,
-				`reserve ${names.get(steamId)} (${steamId}) ${c.scope === 'server' ? 'here' : 'across the organisation'} until ${dateOf(new Date(at.getTime() + c.slotDays * 86400_000))}: ${Math.floor(t.seconds / 60)} min with ${c.lowAt} or fewer on`
+				`${reserved.has(steamId) ? 'replace reservation for' : 'reserve'} ${names.get(steamId)} (${steamId}) ${c.scope === 'server' ? 'here' : 'across the organisation'} until ${dateOf(new Date(at.getTime() + c.slotDays * 86400_000))}: ${Math.floor(t.seconds / 60)} min with ${c.lowAt} or fewer on`
 			);
 		}
 		const lowMinutes = Math.round(stretches.reduce((n, l) => n + (l.to - l.from), 0) / 60_000);
@@ -2320,6 +2345,9 @@ export async function dryRun(
 		);
 		result.notes.push(
 			`Replayed over the last 24 hours only; the live rule adds up seed time over ${c.windowDays} day${c.windowDays === 1 ? '' : 's'}, so it can also fire for players this replay does not show.`
+		);
+		result.notes.push(
+			'The replay shows raw seed time and cannot subtract time already consumed by a live reward; live progress resets whenever a reward is queued.'
 		);
 		return result;
 	}
