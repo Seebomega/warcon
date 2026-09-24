@@ -1974,14 +1974,16 @@ export async function dryRun(
 			       k.victim_name AS "victimName", k.map, k.cause,
 			       CASE WHEN ${counts(sql`k.cause`)} THEN
 			       (SELECT COUNT(*) FROM kills k2
-			         WHERE k2.server_id = k.server_id AND k2.killer_steam_id = k.killer_steam_id
+			         WHERE k2.event_type = 'killed' AND k2.parsed_kill
+			           AND k2.server_id = k.server_id AND k2.killer_steam_id = k.killer_steam_id
 			           AND k2.team_kill AND ${counts(sql`k2.cause`)} AND k2.ts <= k.ts
 			           AND k2.match_row IS NOT DISTINCT FROM k.match_row
 			           AND k2.ts >= COALESCE((SELECT m.started_at - interval '2 minutes' FROM matches m
 			                                    WHERE m.id = k.match_row AND m.server_id = k.server_id),
 			                                 k.ts - interval '1 hour')) END AS n
 			  FROM kills k
-			 WHERE k.server_id = ${server.id} AND k.team_kill AND k.killer_steam_id IS NOT NULL
+			 WHERE k.event_type = 'killed' AND k.parsed_kill
+			   AND k.server_id = ${server.id} AND k.team_kill AND k.killer_steam_id IS NOT NULL
 			   AND k.ts >= ${from}
 			 ORDER BY k.ts ASC LIMIT ${REPLAY_ROWS_MAX}`);
 		let counted = 0;
@@ -2039,7 +2041,8 @@ export async function dryRun(
 			SELECT ts, event_time AS "eventTime", killer_steam_id AS "steamId", killer_name AS name,
 			       cause, headshot, suicide
 			  FROM kills
-			 WHERE server_id = ${server.id} AND ts >= ${from}
+			 WHERE event_type = 'killed' AND parsed_kill
+			   AND server_id = ${server.id} AND ts >= ${from}
 			 ORDER BY ts ASC LIMIT ${KILL_RATE_REPLAY_MAX}`);
 		// The kills of one ingest batch share its receipt time: each batch is spaced out by the match
 		// clock as the live rule does it, then the counted ones replayed.
@@ -2114,7 +2117,8 @@ export async function dryRun(
 			SELECT ts, killer_steam_id AS "steamId", killer_name AS name, cause,
 			       distance_m AS "distanceM", match_row AS "matchRow"
 			  FROM kills
-			 WHERE server_id = ${server.id} AND ts >= ${since}
+			 WHERE event_type = 'killed' AND parsed_kill
+			   AND server_id = ${server.id} AND ts >= ${since}
 			   AND killer_steam_id IS NOT NULL AND NOT suicide ${far}
 			   AND lower(cause) IN (SELECT jsonb_array_elements_text(${JSON.stringify(c.causes.map((x) => x.toLowerCase()))}::text::jsonb))
 			 ORDER BY ts ASC, event_time ASC LIMIT ${KILL_RATE_REPLAY_MAX}`);

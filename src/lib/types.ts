@@ -444,6 +444,8 @@ export interface DossierView {
 		minutes: number;
 		kills: number;
 		deaths: number;
+		/** total cash earned across the visible servers */
+		cash: number;
 		firstSeen: string | null;
 		lastSeen: string | null;
 	};
@@ -456,6 +458,8 @@ export interface DossierView {
 		minutes: number;
 		kills: number;
 		deaths: number;
+		/** total cash earned on this server */
+		cash: number;
 		lastSeen: string;
 	}[];
 	recent: DossierSession[];
