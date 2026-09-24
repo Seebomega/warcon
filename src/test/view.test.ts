@@ -175,6 +175,52 @@ describe.skipIf(!hasTestDb)('what View shows', () => {
 		expect(JSON.stringify(slots)).not.toContain('org-wide ban reason');
 	});
 
+	test('the player endpoint exposes total cash only across servers the reader can view', async () => {
+		const joinedAt = new Date(Date.now() - 120_000);
+		const lastSeen = new Date(Date.now() - 60_000);
+		await env.db.insert(playerSessions).values([
+			{
+				serverId: w.server.id,
+				steamId: PLAYER,
+				name: 'someone',
+				joinedAt,
+				lastSeen,
+				leftAt: lastSeen,
+				cash: 1_234
+			},
+			{
+				serverId: w.otherServer.id,
+				steamId: PLAYER,
+				name: 'someone',
+				joinedAt,
+				lastSeen,
+				leftAt: lastSeen,
+				cash: 5_678
+			},
+			{
+				serverId: w.otherOrgServer.id,
+				steamId: PLAYER,
+				name: 'someone',
+				joinedAt,
+				lastSeen,
+				leftAt: lastSeen,
+				cash: 90_000
+			}
+		]);
+
+		const viewer = (await get('viewer', 'api/servers/[id]/players/[steamId]')).dossier;
+		expect(viewer.summary.cash).toBe(1_234);
+		expect(
+			viewer.perServer.map((s: { serverId: string; cash: number }) => [s.serverId, s.cash])
+		).toEqual([[w.server.id, 1_234]]);
+
+		const owner = (await get('owner', 'api/servers/[id]/players/[steamId]')).dossier;
+		expect(owner.summary.cash).toBe(6_912);
+		expect(
+			owner.perServer.map((s: { cash: number }) => s.cash).sort((a: number, b: number) => a - b)
+		).toEqual([1_234, 5_678]);
+	});
+
 	test('the risk score counts bans and recorded games only on servers the reader can open', async () => {
 		const t = new Date(Date.now() - 3600_000);
 		await env.db.insert(playerSessions).values({

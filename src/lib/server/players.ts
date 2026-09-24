@@ -238,11 +238,13 @@ export async function dossier(
 	const [summary] = await db.execute<{
 		sessions: string;
 		minutes: string | null;
+		cash: string | null;
 		firstSeen: Date | null;
 		lastSeen: Date | null;
 	}>(sql`
 		SELECT COUNT(*) AS sessions,
 		       SUM(EXTRACT(EPOCH FROM (COALESCE(left_at, now()) - joined_at))) / 60 AS minutes,
+		       SUM(cash) AS cash,
 		       MIN(joined_at) AS "firstSeen", MAX(last_seen) AS "lastSeen"
 		  FROM player_sessions WHERE steam_id = ${steamId} AND server_id IN ${ids.length ? ids : ['']}`);
 	const perServer = ids.length
@@ -250,10 +252,12 @@ export async function dossier(
 				serverId: string;
 				sessions: string;
 				minutes: string;
+				cash: string;
 				lastSeen: Date;
 			}>(sql`
 			SELECT server_id AS "serverId", COUNT(*) AS sessions,
 			       SUM(EXTRACT(EPOCH FROM (COALESCE(left_at, now()) - joined_at))) / 60 AS minutes,
+			       SUM(cash) AS cash,
 			       MAX(last_seen) AS "lastSeen"
 			  FROM player_sessions WHERE steam_id = ${steamId} AND server_id IN ${ids}
 			 GROUP BY server_id ORDER BY "lastSeen" DESC`)
@@ -374,6 +378,7 @@ export async function dossier(
 			minutes: Math.round(num(summary?.minutes)),
 			kills: recordedAll.kills,
 			deaths: recordedAll.deaths,
+			cash: num(summary?.cash),
 			firstSeen: iso(summary?.firstSeen ? new Date(summary.firstSeen) : null),
 			lastSeen: iso(summary?.lastSeen ? new Date(summary.lastSeen) : null)
 		},
@@ -384,6 +389,7 @@ export async function dossier(
 			minutes: Math.round(num(r.minutes)),
 			kills: num(recordedOn.get(r.serverId)?.kills),
 			deaths: num(recordedOn.get(r.serverId)?.deaths),
+			cash: num(r.cash),
 			lastSeen: new Date(r.lastSeen).toISOString()
 		})),
 		recent: recent.map((s) => ({
@@ -562,6 +568,8 @@ async function playerCombat(
 		.where(
 			and(
 				inArray(kills.serverId, serverIds),
+				eq(kills.eventType, 'killed'),
+				eq(kills.parsedKill, true),
 				or(eq(kills.killerSteamId, steamId), eq(kills.victimSteamId, steamId))
 			)
 		)
@@ -610,21 +618,24 @@ export async function combatSummary(
 		       COUNT(*) FILTER (WHERE victim_steam_id = ${steamId} AND suicide) AS suicides,
 		       AVG(distance_m) FILTER (WHERE killer_steam_id = ${steamId} AND NOT suicide) AS avg,
 		       MAX(distance_m) FILTER (WHERE killer_steam_id = ${steamId} AND NOT suicide) AS longest
-		  FROM kills WHERE server_id IN ${serverIds}
+		  FROM kills WHERE event_type = 'killed' AND parsed_kill AND server_id IN ${serverIds}
 		   AND (killer_steam_id = ${steamId} OR victim_steam_id = ${steamId})`);
 	if (!num(feed?.n) && !num(t?.kills) && !num(t?.deaths)) return null;
 	const [causes, victims, nemeses] = await Promise.all([
 		db.execute<{ cause: string; kills: string }>(sql`
 			SELECT cause, COUNT(*) AS kills FROM kills
-			 WHERE server_id IN ${serverIds} AND killer_steam_id = ${steamId} AND NOT suicide AND cause IS NOT NULL
+			 WHERE event_type = 'killed' AND parsed_kill AND server_id IN ${serverIds}
+			   AND killer_steam_id = ${steamId} AND NOT suicide AND cause IS NOT NULL
 			 GROUP BY cause ORDER BY kills DESC LIMIT 8`),
 		db.execute<{ steamId: string; name: string; kills: string }>(sql`
 			SELECT victim_steam_id AS "steamId", MAX(victim_name) AS name, COUNT(*) AS kills FROM kills
-			 WHERE server_id IN ${serverIds} AND killer_steam_id = ${steamId} AND NOT suicide
+			 WHERE event_type = 'killed' AND parsed_kill AND server_id IN ${serverIds}
+			   AND killer_steam_id = ${steamId} AND NOT suicide
 			 GROUP BY victim_steam_id ORDER BY kills DESC LIMIT 5`),
 		db.execute<{ steamId: string; name: string; deaths: string }>(sql`
 			SELECT killer_steam_id AS "steamId", MAX(killer_name) AS name, COUNT(*) AS deaths FROM kills
-			 WHERE server_id IN ${serverIds} AND victim_steam_id = ${steamId} AND killer_steam_id IS NOT NULL AND NOT suicide
+			 WHERE event_type = 'killed' AND parsed_kill AND server_id IN ${serverIds}
+			   AND victim_steam_id = ${steamId} AND killer_steam_id IS NOT NULL AND NOT suicide
 			 GROUP BY killer_steam_id ORDER BY deaths DESC LIMIT 5`)
 	]);
 	return {

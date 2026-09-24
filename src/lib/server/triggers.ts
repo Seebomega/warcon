@@ -1120,13 +1120,15 @@ export async function dryRun(
 			SELECT k.ts, k.killer_name AS "killerName", k.killer_steam_id AS "killerSteamId",
 			       k.victim_name AS "victimName",
 			       (SELECT COUNT(*) FROM kills k2
-			         WHERE k2.server_id = k.server_id AND k2.killer_steam_id = k.killer_steam_id
+			         WHERE k2.event_type = 'killed' AND k2.parsed_kill
+			           AND k2.server_id = k.server_id AND k2.killer_steam_id = k.killer_steam_id
 			           AND k2.team_kill AND k2.ts <= k.ts
 			           AND k2.ts >= COALESCE((SELECT MAX(s.joined_at) FROM player_sessions s
 			                                    WHERE s.server_id = k.server_id AND s.steam_id = k.killer_steam_id
 			                                      AND s.joined_at <= k.ts), k.ts - interval '1 hour')) AS n
 			  FROM kills k
-			 WHERE k.server_id = ${server.id} AND k.team_kill AND k.killer_steam_id IS NOT NULL
+			 WHERE k.event_type = 'killed' AND k.parsed_kill
+			   AND k.server_id = ${server.id} AND k.team_kill AND k.killer_steam_id IS NOT NULL
 			   AND k.ts >= ${from}
 			 ORDER BY k.ts ASC LIMIT 500`);
 		for (const r of rows) {
@@ -1173,7 +1175,8 @@ export async function dryRun(
 			SELECT ts, event_time AS "eventTime", killer_steam_id AS "steamId", killer_name AS name,
 			       cause, headshot, suicide
 			  FROM kills
-			 WHERE server_id = ${server.id} AND ts >= ${from}
+			 WHERE event_type = 'killed' AND parsed_kill
+			   AND server_id = ${server.id} AND ts >= ${from}
 			 ORDER BY ts ASC LIMIT ${KILL_RATE_REPLAY_MAX}`);
 		// The kills of one ingest batch share its receipt time: each batch is spaced out by the match
 		// clock as the live rule does it, then the counted ones replayed.
