@@ -36,6 +36,7 @@ import {
 	type ListRow
 } from './db/schema';
 import { DEFAULT_BAN_MESSAGE } from '$lib/ban-message';
+import { noteContainsProtectedWord } from './trigger-rules';
 import { requireSteamId } from './steam';
 import { desiredFor, memberSlots, summaryOf } from './lists-sync';
 import { latestNames } from './sessions';
@@ -441,8 +442,14 @@ async function insertEntry(
 	env: Env,
 	list: ListRow,
 	entry: NewEntry,
-	opts: { replaceExisting?: boolean } = {}
-): Promise<{ id: string; added: boolean; replaced: boolean; lengthened: boolean }> {
+	opts: { replaceExisting?: boolean; protectedNoteWord?: string } = {}
+): Promise<{
+	id: string;
+	added: boolean;
+	replaced: boolean;
+	lengthened: boolean;
+	protected: boolean;
+}> {
 	return env.db.transaction((tx) => insertInto(tx, list, entry, opts));
 }
 
@@ -458,14 +465,20 @@ async function insertInto(
 	tx: Tx,
 	list: ListRow,
 	entry: NewEntry,
-	opts: { lengthen?: boolean; replaceExisting?: boolean } = {}
-): Promise<{ id: string; added: boolean; replaced: boolean; lengthened: boolean }> {
+	opts: { lengthen?: boolean; replaceExisting?: boolean; protectedNoteWord?: string } = {}
+): Promise<{
+	id: string;
+	added: boolean;
+	replaced: boolean;
+	lengthened: boolean;
+	protected: boolean;
+}> {
 	const id = newId();
 	// Serialise adds to one list so two writers cannot race past the duplicate check; the
 	// partial unique index on (list_id, steam_id) where removed_at is null is the backstop.
 	await tx.execute(sql`SELECT 1 FROM ${lists} WHERE ${lists.id} = ${list.id} FOR UPDATE`);
 	const found = tx
-		.select({ id: listEntries.id, expiresAt: listEntries.expiresAt })
+		.select({ id: listEntries.id, expiresAt: listEntries.expiresAt, reason: listEntries.reason })
 		.from(listEntries)
 		.where(
 			and(
@@ -478,6 +491,14 @@ async function insertInto(
 	// Lengthening decides from the entry's expiry: an edit of it by hand is seen, or waits.
 	const [dup] = opts.lengthen || opts.replaceExisting ? await found.for('update') : await found;
 	if (dup) {
+		if (opts.replaceExisting && noteContainsProtectedWord(dup.reason, opts.protectedNoteWord ?? ''))
+			return {
+				id: dup.id,
+				added: false,
+				replaced: false,
+				lengthened: false,
+				protected: true
+			};
 		if (opts.replaceExisting) {
 			await tx
 				.update(listEntries)
@@ -495,18 +516,30 @@ async function insertInto(
 				(entry.expiresAt === null ||
 					entry.expiresAt.getTime() - dup.expiresAt.getTime() >= LENGTHEN_MIN_MS);
 			if (!opts.lengthen || !longer)
-				return { id: dup.id, added: false, replaced: false, lengthened: false };
+				return {
+					id: dup.id,
+					added: false,
+					replaced: false,
+					lengthened: false,
+					protected: false
+				};
 			await tx
 				.update(listEntries)
 				.set({ expiresAt: entry.expiresAt })
 				.where(eq(listEntries.id, dup.id));
 			await touch(tx, list.id);
-			return { id: dup.id, added: false, replaced: false, lengthened: true };
+			return {
+				id: dup.id,
+				added: false,
+				replaced: false,
+				lengthened: true,
+				protected: false
+			};
 		}
 	}
 	await tx.insert(listEntries).values({ id, listId: list.id, ...entry });
 	await touch(tx, list.id);
-	return { id, added: true, replaced: !!dup, lengthened: false };
+	return { id, added: true, replaced: !!dup, lengthened: false, protected: false };
 }
 
 /**
@@ -520,8 +553,19 @@ export async function grantEntry(
 	env: Env,
 	list: ListRow,
 	entry: { steamId: string; reason: string; expiresAt: Date | null; addedByName: string },
-	opts: { tx?: Tx; lengthen?: boolean; replaceExisting?: boolean } = {}
-): Promise<{ id: string; added: boolean; replaced: boolean; lengthened: boolean }> {
+	opts: {
+		tx?: Tx;
+		lengthen?: boolean;
+		replaceExisting?: boolean;
+		protectedNoteWord?: string;
+	} = {}
+): Promise<{
+	id: string;
+	added: boolean;
+	replaced: boolean;
+	lengthened: boolean;
+	protected: boolean;
+}> {
 	const row = { ...entry, addedBy: null };
 	return opts.tx
 		? insertInto(opts.tx, list, row, opts)

@@ -574,6 +574,7 @@ async function deliverSeedReward(env: Env, row: OutboxRow): Promise<void> {
 		/** missing on rows from before the rule had a scope: those went org-wide */
 		scope?: 'server' | 'org';
 		replaceExisting?: boolean;
+		protectedNoteWord?: string;
 	};
 	stats.inFlight++;
 	try {
@@ -590,7 +591,8 @@ async function deliverSeedReward(env: Env, row: OutboxRow): Promise<void> {
 		const {
 			id: entryId,
 			added,
-			replaced
+			replaced,
+			protected: protectedEntry
 		} = await grantEntry(
 			env,
 			list,
@@ -600,7 +602,10 @@ async function deliverSeedReward(env: Env, row: OutboxRow): Promise<void> {
 				expiresAt,
 				addedByName: `trigger: ${row.triggerName}`
 			},
-			{ replaceExisting: !!p.replaceExisting }
+			{
+				replaceExisting: !!p.replaceExisting,
+				protectedNoteWord: p.protectedNoteWord
+			}
 		);
 		// The next sync puts the slot on the server; remember it now so the rule does not grant
 		// it again before the next snapshot.
@@ -610,7 +615,9 @@ async function deliverSeedReward(env: Env, row: OutboxRow): Promise<void> {
 				env,
 				row,
 				'skipped',
-				`${p.steamId} already has a reserved slot ${here ? `on ${server.name}` : `in ${org.name}`}.`
+				protectedEntry
+					? `${p.steamId}'s existing reserved slot was kept because its note contains the protected word “${p.protectedNoteWord}”.`
+					: `${p.steamId} already has a reserved slot ${here ? `on ${server.name}` : `in ${org.name}`}.`
 			);
 		if (m) {
 			m.syncAt = 0;

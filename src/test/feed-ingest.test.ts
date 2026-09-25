@@ -5,7 +5,13 @@ import { randomUUID } from 'node:crypto';
 import { and, eq } from 'drizzle-orm';
 import type { Env } from '$lib/server/env';
 import { kills } from '$lib/server/db/schema';
-import { countKills, ingestBatch, recentKills } from '$lib/server/feed';
+import {
+	countFeedEvents,
+	countKills,
+	ingestBatch,
+	recentFeedEvents,
+	recentKills
+} from '$lib/server/feed';
 import { EMPTY_FILTER } from '$lib/kills';
 import { hasTestDb, testEnv } from './db';
 import { seedWorld } from './world';
@@ -100,5 +106,23 @@ describe.skipIf(!hasTestDb)('kill feed ingest', () => {
 		expect(
 			(await recentKills(env, w.server.id, null, 10, EMPTY_FILTER)).map((k) => k.eventId)
 		).toEqual([killId]);
+		expect(await countFeedEvents(env, w.server.id)).toBe(3);
+		expect(await countFeedEvents(env, w.server.id, 'killed')).toBe(2);
+		const first = await recentFeedEvents(env, w.server.id, null, 2);
+		expect(first).toHaveLength(2);
+		const older = await recentFeedEvents(
+			env,
+			w.server.id,
+			{ ts: new Date(first[1].ts), eventId: first[1].eventId },
+			2
+		);
+		expect(new Set([...first, ...older].map((e) => e.eventId))).toEqual(
+			new Set([killId, startedId, incompleteId])
+		);
+		expect((await recentFeedEvents(env, w.server.id, null, 10, 'match_started'))[0]).toMatchObject({
+			eventId: startedId,
+			eventType: 'match_started',
+			rawEvent: started
+		});
 	});
 });

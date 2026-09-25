@@ -32,7 +32,7 @@ import {
 	type KillRow,
 	type ServerRow
 } from './db/schema';
-import type { KillView } from '$lib/types';
+import type { FeedEventView, KillView } from '$lib/types';
 import { VEHICLE_TAGS, type KillFilter } from '$lib/kills';
 import type { SessionUser } from './access';
 import { FEED_TOKEN_PREFIX, isTeamKill, parseBatch, type ParsedEvent } from './feed-core';
@@ -169,6 +169,20 @@ export function killView(r: KillRow): KillView {
 		suicide: r.suicide,
 		teamKill: r.teamKill,
 		tags: Array.isArray(r.tags) ? (r.tags as string[]) : []
+	};
+}
+
+export function feedEventView(r: KillRow): FeedEventView {
+	return {
+		eventId: r.eventId,
+		ts: r.ts.toISOString(),
+		eventType: r.eventType,
+		parsedKill: r.parsedKill,
+		instanceId: r.instanceId,
+		matchId: r.matchId,
+		eventTime: r.eventTime,
+		map: r.map,
+		rawEvent: r.rawEvent
 	};
 }
 
@@ -427,5 +441,43 @@ export async function countKills(
 		.select({ n: count() })
 		.from(kills)
 		.where(killWhere(serverId, null, filter, match));
+	return row?.n ?? 0;
+}
+
+export interface EventsBefore {
+	ts: Date;
+	eventId: string;
+}
+
+const eventWhere = (serverId: string, before: EventsBefore | null, eventType: string): SQL =>
+	and(
+		eq(kills.serverId, serverId),
+		eventType ? eq(kills.eventType, eventType) : undefined,
+		before ? sql`(${kills.ts}, ${kills.eventId}) < (${before.ts}, ${before.eventId})` : undefined
+	)!;
+
+/** Every feed event, including unknown types and incomplete kills, newest first. */
+export async function recentFeedEvents(
+	env: Env,
+	serverId: string,
+	before: EventsBefore | null,
+	limit: number,
+	eventType = ''
+): Promise<FeedEventView[]> {
+	const rows = await env.db
+		.select()
+		.from(kills)
+		.where(eventWhere(serverId, before, eventType))
+		.orderBy(desc(kills.ts), desc(kills.eventId))
+		.limit(limit);
+	return rows.map(feedEventView);
+}
+
+/** How many stored feed events match the optional exact event type. */
+export async function countFeedEvents(env: Env, serverId: string, eventType = ''): Promise<number> {
+	const [row] = await env.db
+		.select({ n: count() })
+		.from(kills)
+		.where(eventWhere(serverId, null, eventType));
 	return row?.n ?? 0;
 }

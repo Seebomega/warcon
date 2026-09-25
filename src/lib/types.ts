@@ -171,6 +171,20 @@ export interface KillView {
 	teamKill: boolean;
 	tags: string[];
 }
+/** One raw event accepted by the game feed, whether or not it was a complete kill. */
+export interface FeedEventView {
+	eventId: string;
+	/** when Warcon received it */
+	ts: string;
+	eventType: string;
+	parsedKill: boolean;
+	instanceId: string;
+	matchId: string;
+	/** seconds on the match clock, when supplied */
+	eventTime: number | null;
+	map: string;
+	rawEvent: unknown;
+}
 /** One trigger action and what became of it. */
 export interface OutboxView {
 	id: number;

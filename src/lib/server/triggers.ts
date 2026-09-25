@@ -42,6 +42,8 @@ import { writeAudit } from './audit';
 import { emit } from './events';
 import {
 	kills,
+	listEntries,
+	lists,
 	outbox,
 	playerSessions,
 	samples,
@@ -87,6 +89,7 @@ import {
 	type HeldMatchEnd,
 	type MatchLineVars,
 	matchReplay,
+	noteContainsProtectedWord,
 	seedReplay,
 	type MatchBroadcastConfig,
 	type MatchEnd,
@@ -1542,6 +1545,29 @@ async function evalSeedReward(
 		out.updates.push({ id: row.id, state: progress });
 		return;
 	}
+	const protectedPlayers = new Set<string>();
+	if (cfg.replaceExisting && cfg.protectedNoteWord) {
+		const protectedRows = await env.db
+			.select({ steamId: listEntries.steamId, reason: listEntries.reason })
+			.from(listEntries)
+			.innerJoin(lists, eq(lists.id, listEntries.listId))
+			.where(
+				and(
+					eq(lists.kind, 'reserve'),
+					isNull(listEntries.removedAt),
+					inArray(
+						listEntries.steamId,
+						ctx.players.map((p) => p.steamId)
+					),
+					cfg.scope === 'server'
+						? eq(lists.serverId, ctx.server.id)
+						: and(eq(lists.orgId, ctx.server.orgId), isNull(lists.serverId))
+				)
+			);
+		for (const entry of protectedRows)
+			if (noteContainsProtectedWord(entry.reason, cfg.protectedNoteWord))
+				protectedPlayers.add(entry.steamId);
+	}
 	const closed = await env.db
 		.select({
 			steamId: playerSessions.steamId,
@@ -1573,7 +1599,8 @@ async function evalSeedReward(
 			? previous.balance + Math.max(0, total - previous.observed)
 			: Number(historyRow?.windowSeconds ?? 0) + openSeconds;
 		const qualified = balance >= cfg.minutes * 60;
-		const eligible = !ctx.reserved.has(p.steamId) || cfg.replaceExisting;
+		const eligible =
+			!protectedPlayers.has(p.steamId) && (!ctx.reserved.has(p.steamId) || cfg.replaceExisting);
 		progress.players[p.steamId] = {
 			observed: total,
 			balance: qualified && eligible ? 0 : balance,
@@ -1599,7 +1626,8 @@ async function evalSeedReward(
 				reason,
 				slotDays: cfg.slotDays,
 				scope: cfg.scope === 'server' ? 'server' : 'org',
-				replaceExisting: cfg.replaceExisting
+				replaceExisting: cfg.replaceExisting,
+				protectedNoteWord: cfg.protectedNoteWord
 			},
 			target: p.steamId,
 			okMessage: `Reserved a slot for ${p.name}.`,
@@ -2349,6 +2377,10 @@ export async function dryRun(
 		result.notes.push(
 			'The replay shows raw seed time and cannot subtract time already consumed by a live reward; live progress resets whenever a reward is queued.'
 		);
+		if (c.replaceExisting && c.protectedNoteWord)
+			result.notes.push(
+				`The replay cannot read reserved-slot notes; live delivery keeps entries whose note contains “${c.protectedNoteWord}”.`
+			);
 		return result;
 	}
 	if (kind === 'name_filter') {
