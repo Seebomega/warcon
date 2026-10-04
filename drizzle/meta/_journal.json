@@ -281,6 +281,13 @@
       "when": 1790278202475,
       "tag": "0039_seed_progress_backfill",
       "breakpoints": true
+    },
+    {
+      "idx": 40,
+      "version": "7",
+      "when": 1791740935613,
+      "tag": "0040_player_totals",
+      "breakpoints": true
     }
   ]
 }
