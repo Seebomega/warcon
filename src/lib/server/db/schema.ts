@@ -813,7 +813,8 @@ export const triggers = pgTable(
 				'kill_rate',
 				'two_teams',
 				'kill_distance',
-				'afk_protection'
+				'afk_protection',
+				'name_change'
 			]
 		}).notNull(),
 		name: text('name').notNull(),
