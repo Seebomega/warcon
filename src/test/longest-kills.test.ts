@@ -88,6 +88,14 @@ describe.skipIf(!hasTestDb)('the longest-kills route', () => {
 		).toEqual([300, 250]);
 	});
 
+	test('maxM drops what lies beyond it, and a malformed one is no bound', async () => {
+		expect(await metres('range=30d&maxM=1200')).toEqual([900, 700, 400, 300, 250]);
+		expect(await metres('range=30d&maxM=400&limit=25')).toEqual([400, 300, 250]);
+		expect(await metres('range=30d&maxM=1200&cause=Id.Item.ATMine')).toEqual([]);
+		expect(await metres('range=30d&maxM=nope')).toEqual([6000, 900, 700, 400, 300]);
+		expect(await metres('range=30d&maxM=-5')).toEqual([6000, 900, 700, 400, 300]);
+	});
+
 	test('limit is bounded', async () => {
 		expect(await metres('range=30d&limit=2')).toHaveLength(2);
 		expect(await metres('range=30d&limit=0')).toHaveLength(1);

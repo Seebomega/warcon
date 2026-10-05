@@ -666,12 +666,14 @@ async function loadCombat(
  * The longest kills since `from`, by distance, suicides and team kills left out. `causes` keeps
  * only those tags and `exclude` leaves those out, each matching whole and in any case as the kills
  * route's filter does (the game writes `ID.Item.` for some items and `Id.Item.` for others).
+ * `maxM` drops kills beyond it: the feed carries the odd impossible distance (a pistol at 4 km),
+ * which would otherwise sit on top of every list.
  */
 export async function longestKills(
 	env: Env,
 	serverId: string,
 	from: Date,
-	opts: { causes?: string[]; exclude?: string[]; limit?: number } = {}
+	opts: { causes?: string[]; exclude?: string[]; maxM?: number | null; limit?: number } = {}
 ): Promise<LongestKill[]> {
 	const keep = (opts.causes ?? []).map((c) => c.toLowerCase());
 	const drop = (opts.exclude ?? []).map((c) => c.toLowerCase());
@@ -687,6 +689,7 @@ export async function longestKills(
 		   AND NOT suicide AND NOT team_kill
 		   ${keep.length ? sql`AND lower(cause) IN ${keep}` : sql``}
 		   ${drop.length ? sql`AND (cause IS NULL OR lower(cause) NOT IN ${drop})` : sql``}
+		   ${opts.maxM != null ? sql`AND distance_m <= ${opts.maxM}` : sql``}
 		 ORDER BY distance_m DESC LIMIT ${opts.limit ?? 5}`);
 	return rows.map((r) => ({
 		ts: isoOf(r.ts),
