@@ -96,6 +96,23 @@ describe.skipIf(!hasTestDb)('the longest-kills route', () => {
 		expect(await metres('range=30d&maxM=-5')).toEqual([6000, 900, 700, 400, 300]);
 	});
 
+	test('each kill names its shooter by SteamID, not only by name', async () => {
+		const r = await callApi(longestRoute, w.users.viewer, {
+			params: { id: w.server.id },
+			query: 'range=30d&limit=1'
+		});
+		expect((r.body as { kills: LongestKill[] }).kills).toEqual([
+			{
+				ts: expect.any(String),
+				killer: 'Ghostpepper',
+				killerSteamId: A,
+				victim: 'T0XIC_AVENGER',
+				cause: 'ID.Item.ATMine',
+				distanceM: 6000
+			}
+		]);
+	});
+
 	test('limit is bounded', async () => {
 		expect(await metres('range=30d&limit=2')).toHaveLength(2);
 		expect(await metres('range=30d&limit=0')).toHaveLength(1);

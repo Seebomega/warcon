@@ -131,6 +131,8 @@ export interface CombatPlayer {
 export interface LongestKill {
 	ts: string;
 	killer: string;
+	/** so a page can link the shooter without looking a name up (names are not unique) */
+	killerSteamId: string | null;
 	victim: string;
 	cause: string | null;
 	distanceM: number;
@@ -680,11 +682,13 @@ export async function longestKills(
 	const rows = await env.db.execute<{
 		ts: Date;
 		killer: string;
+		killerSteamId: string | null;
 		victim: string;
 		cause: string | null;
 		d: number;
 	}>(sql`
-		SELECT ts, killer_name AS killer, victim_name AS victim, cause, distance_m AS d
+		SELECT ts, killer_name AS killer, killer_steam_id AS "killerSteamId", victim_name AS victim, cause,
+		       distance_m AS d
 		  FROM kills WHERE event_type = 'killed' AND parsed_kill AND server_id = ${serverId} AND ts >= ${from} AND distance_m IS NOT NULL
 		   AND NOT suicide AND NOT team_kill
 		   ${keep.length ? sql`AND lower(cause) IN ${keep}` : sql``}
@@ -694,6 +698,7 @@ export async function longestKills(
 	return rows.map((r) => ({
 		ts: isoOf(r.ts),
 		killer: r.killer,
+		killerSteamId: r.killerSteamId,
 		victim: r.victim,
 		cause: r.cause,
 		distanceM: Math.round(num(r.d))
