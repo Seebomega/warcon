@@ -43,6 +43,18 @@ export const VEHICLE_TAGS = ['VehicleExplosion', 'RoadKill'];
 
 const text = (v: string | null, max = 100): string => (v ?? '').trim().slice(0, max);
 
+/** At most this many cause tags in one list, so a query string cannot ask for an unbounded IN. */
+export const MAX_CAUSE_TAGS = 64;
+
+/**
+ * Cause tags from repeated and/or comma-separated query values (`cause=a&cause=b`, `cause=a,b`):
+ * trimmed, each cut as the cause filter cuts it, blanks and repeats dropped, at most MAX_CAUSE_TAGS.
+ */
+export function parseCauseTags(values: string[]): string[] {
+	const tags = values.flatMap((v) => v.split(',')).map((v) => text(v, 200));
+	return [...new Set(tags.filter(Boolean))].slice(0, MAX_CAUSE_TAGS);
+}
+
 /** The filter a query string carries; anything unknown or malformed is simply not a filter. */
 export function parseKillFilter(params: URLSearchParams): KillFilter {
 	const kind = params.get('kind') ?? '';

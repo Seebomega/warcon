@@ -125,6 +125,7 @@ const MATRIX: Record<string, Policy | typeof PER_LIST> = {
 	'GET api/servers/[id]/feed': 'cap:server.view',
 	'GET api/servers/[id]/events': 'cap:server.view',
 	'GET api/servers/[id]/kills': 'cap:server.view',
+	'GET api/servers/[id]/kills/longest': 'cap:server.view',
 	'GET api/servers/[id]/leaderboard': 'cap:server.view',
 	'GET api/servers/[id]/leaderboard/export': 'cap:server.view',
 	'GET api/servers/[id]/matches': 'cap:server.view',
