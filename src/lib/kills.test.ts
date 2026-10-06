@@ -4,6 +4,8 @@ import {
 	isEmptyFilter,
 	killFilterParams,
 	killMatches,
+	MAX_CAUSE_TAGS,
+	parseCauseTags,
 	parseKillFilter,
 	type KillFilter
 } from './kills';
@@ -106,5 +108,26 @@ describe('killMatches', () => {
 		const both = f({ killer: 'alice', kind: 'headshot', minM: 40 });
 		expect(killMatches(both, kill({ headshot: true }))).toBe(true);
 		expect(killMatches(both, kill({ headshot: true, distanceM: 10 }))).toBe(false);
+	});
+});
+
+describe('parseCauseTags', () => {
+	test('repeated and comma-separated values make one list', () => {
+		expect(parseCauseTags(['Id.Item.M4', 'Id.Item.AK74M,Id.Item.WEPN_029'])).toEqual([
+			'Id.Item.M4',
+			'Id.Item.AK74M',
+			'Id.Item.WEPN_029'
+		]);
+	});
+
+	test('blanks and repeats are dropped, each tag trimmed', () => {
+		expect(parseCauseTags([' Id.Item.M4 ,,', 'Id.Item.M4', ''])).toEqual(['Id.Item.M4']);
+		expect(parseCauseTags([])).toEqual([]);
+	});
+
+	test('the list is capped, and so is each tag', () => {
+		const many = Array.from({ length: MAX_CAUSE_TAGS + 10 }, (_, i) => `Id.Item.T${i}`);
+		expect(parseCauseTags([many.join(',')])).toHaveLength(MAX_CAUSE_TAGS);
+		expect(parseCauseTags(['x'.repeat(500)])[0]).toHaveLength(200);
 	});
 });

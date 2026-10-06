@@ -1448,6 +1448,7 @@ GET|POST /api/servers/:id/rcon/:action   (GET for reads with query params, POST 
 GET  /api/servers/:id/analytics?range=24h|7d|30d       includes `combat` from the kill feed when the server has one
 GET  /api/servers/:id/analytics/periods?range=7d&tz=Europe/Berlin   players, new players and session lengths per hour (24h) or per day in that zone
 GET  /api/servers/:id/kills?before=<iso>&beforeTime=<s>&limit=50&count=1&match=<matchId>   the stored kill feed, newest first; `count=1` adds the total, `match` narrows it to one match; `kills` frames on /api/live/events carry new ones
+GET  /api/servers/:id/kills/longest?range=24h|7d|30d&cause=<tag>,<tag>&exclude=<tag>&maxM=1200&limit=5   the longest kills by distance, as on the Analytics card; `cause` keeps those tags, `exclude` leaves them out (whole, any case), up to 64 each; `maxM` drops kills beyond it (the feed carries the odd impossible distance); limit 1-25; each kill carries `killerSteamId`
 GET  /api/servers/:id/matches?page=1                    match history, newest first, fifty a page   GET /api/servers/:id/matches/:matchId   a match that ended: lines, score timeline, awards
 POST /api/servers/:id/stats/purge {name}                 deletes the server's kills, matches and match rows (org owners; the name must be the server's; sessions stay)
      &killer=&victim=&player=&cause=&kind=&minM=            filters: a SteamID exactly, else part of a name; the raw cause tag; kind headshot|teamKill|suicide|vehicle|environment; metres at least

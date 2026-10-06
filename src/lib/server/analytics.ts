@@ -25,6 +25,8 @@ const BUCKET_S: Record<Range, number> = { '24h': 300, '7d': 1800, '30d': 7200 };
 const ROLLED_BEYOND_MS = 14 * 86400_000;
 
 export const parseRange = (v: string | null): Range => (v === '7d' || v === '30d' ? v : '24h');
+/** Where a range starts, counted back from now. */
+export const rangeFrom = (range: Range, now = Date.now()): Date => new Date(now - RANGE_MS[range]);
 
 export type PeriodUnit = 'hour' | 'day';
 /** The periods a range is cut into for the per-period charts: hours over a day, days beyond. */
@@ -129,6 +131,8 @@ export interface CombatPlayer {
 export interface LongestKill {
 	ts: string;
 	killer: string;
+	/** so a page can link the shooter without looking a name up (names are not unique) */
+	killerSteamId: string | null;
 	victim: string;
 	cause: string | null;
 	distanceM: number;
@@ -633,11 +637,7 @@ async function loadCombat(
 			SELECT k.steam_id AS "steamId", k.name, k.kills, COALESCE(d.deaths, 0) AS deaths, k.headshots,
 			       k.team_kills AS "teamKills", k.avg
 			  FROM k LEFT JOIN d ON d.steam_id = k.steam_id ORDER BY k.kills DESC LIMIT 25`),
-		db.execute<{ ts: Date; killer: string; victim: string; cause: string | null; d: number }>(sql`
-			SELECT ts, killer_name AS killer, victim_name AS victim, cause, distance_m AS d
-			  FROM kills WHERE event_type = 'killed' AND parsed_kill AND server_id = ${serverId} AND ts >= ${from} AND distance_m IS NOT NULL
-			   AND NOT suicide AND NOT team_kill
-			 ORDER BY distance_m DESC LIMIT 5`)
+		longestKills(env, serverId, from)
 	]);
 	return {
 		kills: num(totals?.kills),
@@ -660,14 +660,49 @@ async function loadCombat(
 			teamKills: num(r.teamKills),
 			avgDistanceM: r.avg === null ? null : Math.round(num(r.avg))
 		})),
-		longest: longest.map((r) => ({
-			ts: isoOf(r.ts),
-			killer: r.killer,
-			victim: r.victim,
-			cause: r.cause,
-			distanceM: Math.round(num(r.d))
-		}))
+		longest
 	};
+}
+
+/**
+ * The longest kills since `from`, by distance, suicides and team kills left out. `causes` keeps
+ * only those tags and `exclude` leaves those out, each matching whole and in any case as the kills
+ * route's filter does (the game writes `ID.Item.` for some items and `Id.Item.` for others).
+ * `maxM` drops kills beyond it: the feed carries the odd impossible distance (a pistol at 4 km),
+ * which would otherwise sit on top of every list.
+ */
+export async function longestKills(
+	env: Env,
+	serverId: string,
+	from: Date,
+	opts: { causes?: string[]; exclude?: string[]; maxM?: number | null; limit?: number } = {}
+): Promise<LongestKill[]> {
+	const keep = (opts.causes ?? []).map((c) => c.toLowerCase());
+	const drop = (opts.exclude ?? []).map((c) => c.toLowerCase());
+	const rows = await env.db.execute<{
+		ts: Date;
+		killer: string;
+		killerSteamId: string | null;
+		victim: string;
+		cause: string | null;
+		d: number;
+	}>(sql`
+		SELECT ts, killer_name AS killer, killer_steam_id AS "killerSteamId", victim_name AS victim, cause,
+		       distance_m AS d
+		  FROM kills WHERE event_type = 'killed' AND parsed_kill AND server_id = ${serverId} AND ts >= ${from} AND distance_m IS NOT NULL
+		   AND NOT suicide AND NOT team_kill
+		   ${keep.length ? sql`AND lower(cause) IN ${keep}` : sql``}
+		   ${drop.length ? sql`AND (cause IS NULL OR lower(cause) NOT IN ${drop})` : sql``}
+		   ${opts.maxM != null ? sql`AND distance_m <= ${opts.maxM}` : sql``}
+		 ORDER BY distance_m DESC LIMIT ${opts.limit ?? 5}`);
+	return rows.map((r) => ({
+		ts: isoOf(r.ts),
+		killer: r.killer,
+		killerSteamId: r.killerSteamId,
+		victim: r.victim,
+		cause: r.cause,
+		distanceM: Math.round(num(r.d))
+	}));
 }
 
 /**
