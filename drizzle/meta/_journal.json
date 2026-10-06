@@ -290,10 +290,17 @@
       "breakpoints": true
     },
     {
-      "idx": 39,
+      "idx": 41,
       "version": "7",
       "when": 1791142161935,
-      "tag": "0039_player_days",
+      "tag": "0041_player_days",
+      "breakpoints": true
+    },
+    {
+      "idx": 42,
+      "version": "7",
+      "when": 1791741011138,
+      "tag": "0042_seasons",
       "breakpoints": true
     }
   ]

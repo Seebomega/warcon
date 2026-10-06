@@ -1,4 +1,4 @@
--- Each player's settled totals per server per UTC day (player_days), for the ranged boards (7, 30
+-- Migration 0041: each player's settled totals per server per UTC day (player_days), for the ranged boards (7, 30
 -- and 90 days). rangeBase in leaderboards.ts reads a range from F as: the rows of every day after
 -- F's (D1 = F's UTC day + 1); for each session that crossed D1's midnight (its joined_at is kept on
 -- D1's row), its time from F, or its join, to that midnight; and, read raw, the sessions closed in
