@@ -156,7 +156,15 @@ describe.skipIf(!hasTestDb)('what View shows', () => {
 			banReasons: null
 		});
 		expect(JSON.stringify(viewer)).not.toContain('suspected alt');
-		expect(JSON.stringify(viewer)).not.toContain('org-wide ban reason');
+		// Who is banned and why is View, as a server's Bans tab says it; who placed it is not.
+		expect(viewer.bans).toEqual([
+			expect.objectContaining({
+				source: 'org',
+				reason: 'org-wide ban reason',
+				by: '',
+				canUnban: false
+			})
+		]);
 
 		const operator = await dossier('operator');
 		expect(operator.notes.map((n: { body: string }) => n.body)).toEqual([
@@ -181,7 +189,11 @@ describe.skipIf(!hasTestDb)('what View shows', () => {
 		const slots = await dossier('orgSlots');
 		expect(slots.orgLists).toMatchObject({ ban: null, canBan: false, canReserve: true });
 		expect(slots.orgLists.reserve).toMatchObject({ reason: 'sponsor, paid until March' });
-		expect(JSON.stringify(slots)).not.toContain('org-wide ban reason');
+		// the ban's reason as the Bans tab gives every reader; its author stays with the ban list's
+		expect(slots.bans).toEqual([
+			expect.objectContaining({ source: 'org', reason: 'org-wide ban reason', by: '' })
+		]);
+		expect(JSON.stringify(slots.bans)).not.toContain('admin');
 	});
 
 	test('the player endpoint exposes total cash only across servers the reader can view', async () => {
