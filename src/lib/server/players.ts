@@ -39,6 +39,7 @@ import type {
 } from '$lib/types';
 import { killView } from './feed';
 import { latestNames } from './sessions';
+import { feedNamesOf } from './aliases';
 
 export { requireSteamId } from './steam';
 
@@ -342,7 +343,8 @@ export async function dossier(
 		allOrgServers,
 		combat,
 		performance,
-		seedRows
+		seedRows,
+		feedNames
 	] = await Promise.all([
 		getProfiles(env, [steamId], {
 			refresh: !!opts.refreshSteam,
@@ -383,7 +385,8 @@ export async function dossier(
 					eq(triggers.enabled, true)
 				)
 			)
-			.limit(1)
+			.limit(1),
+		feedNamesOf(env, ids, steamId)
 	]);
 	const seedRow = seedRows[0];
 	const seedConfig = seedRow?.config as Partial<SeedRewardConfig> | undefined;
@@ -405,6 +408,8 @@ export async function dossier(
 		steamId,
 		name,
 		names: names.map((n) => n.name),
+		feedNames: feedNames.names,
+		feedNamesTotal: feedNames.total,
 		online: online
 			? { serverId: online.serverId, serverName: nameOf.get(online.serverId) || '' }
 			: null,
