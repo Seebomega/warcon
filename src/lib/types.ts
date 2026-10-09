@@ -579,7 +579,8 @@ export type TriggerKind =
 	| 'kill_distance'
 	| 'afk_protection'
 	| 'name_change'
-	| 'bounty';
+	| 'bounty'
+	| 'rotation_shuffle';
 
 export interface TriggerView {
 	id: string;
