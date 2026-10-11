@@ -24,7 +24,7 @@
 -- holding its table against writes until the migrations commit; then the rebuild, into the table
 -- before its key exists, and the key last. The rebuild sees every session closed and every match
 -- ended before the locks, and nothing can close or end between it and the triggers taking over.
-CREATE TABLE "player_totals" (
+CREATE TABLE IF NOT EXISTS "player_totals" (
 	"server_id" text NOT NULL,
 	"steam_id" text NOT NULL,
 	"sessions" integer DEFAULT 0 NOT NULL,
@@ -48,7 +48,7 @@ CREATE TABLE "player_totals" (
 -- A player's result in a match: matchResult() in $lib/leaderboard, as lines() in leaderboards.ts
 -- writes it out (no faction, or a faction not on a scoreboard that has one: none; then the
 -- winner; then a draw if anybody scored a number; else none).
-CREATE FUNCTION "match_result"(final_scores jsonb, winner text, faction text) RETURNS text
+CREATE OR REPLACE FUNCTION "match_result"(final_scores jsonb, winner text, faction text) RETURNS text
 LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
 	SELECT CASE WHEN faction IS NULL THEN NULL
 	            WHEN jsonb_typeof(final_scores) = 'array' AND jsonb_array_length(final_scores) > 0
@@ -62,7 +62,7 @@ LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
 $$;--> statement-breakpoint
 -- Every writer of the totals reads its sources at READ COMMITTED: a recount from an older snapshot
 -- (REPEATABLE READ, SERIALIZABLE) could put back what a purge committed meanwhile had removed.
-CREATE FUNCTION "player_totals_lock"(server_id text) RETURNS void LANGUAGE plpgsql AS $$
+CREATE OR REPLACE FUNCTION "player_totals_lock"(server_id text) RETURNS void LANGUAGE plpgsql AS $$
 BEGIN
 	IF current_setting('transaction_isolation') <> 'read committed' THEN
 		RAISE EXCEPTION 'player_totals is written at READ COMMITTED only (this transaction is %)',
@@ -72,7 +72,7 @@ BEGIN
 END $$;--> statement-breakpoint
 -- These players' rows on this server, worked out again from their closed sessions and their lines
 -- of ended matches (joined on match and server, as lines() joins them); a row with neither goes.
-CREATE FUNCTION "player_totals_recount"(sid text, pids text[]) RETURNS void LANGUAGE plpgsql AS $$
+CREATE OR REPLACE FUNCTION "player_totals_recount"(sid text, pids text[]) RETURNS void LANGUAGE plpgsql AS $$
 BEGIN
 	PERFORM player_totals_lock(sid);
 	INSERT INTO player_totals AS t (server_id, steam_id, sessions, seconds, seed_seconds, cash, last_seen,
@@ -110,7 +110,7 @@ BEGIN
 	DELETE FROM player_totals WHERE server_id = sid AND steam_id = ANY (pids) AND sessions = 0 AND matches = 0;
 END $$;--> statement-breakpoint
 -- A session closing (BEFORE, so a recount later in the same statement sees it once).
-CREATE FUNCTION "player_totals_session_closed"() RETURNS trigger LANGUAGE plpgsql AS $$
+CREATE OR REPLACE FUNCTION "player_totals_session_closed"() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
 	PERFORM player_totals_lock(NEW.server_id);
 	INSERT INTO player_totals AS t (server_id, steam_id, sessions, seconds, seed_seconds, cash, last_seen)
@@ -123,7 +123,7 @@ BEGIN
 	RETURN NEW;
 END $$;--> statement-breakpoint
 -- A closed session inserted, changed or deleted: its pair (and the pair it moved to) recounted.
-CREATE FUNCTION "player_totals_session_changed"() RETURNS trigger LANGUAGE plpgsql AS $$
+CREATE OR REPLACE FUNCTION "player_totals_session_changed"() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
 	IF TG_OP <> 'INSERT' THEN
 		PERFORM player_totals_recount(OLD.server_id, ARRAY[OLD.steam_id]);
@@ -135,7 +135,7 @@ BEGIN
 END $$;--> statement-breakpoint
 -- A match ending: each of its lines added with its result (BEFORE, as for a close). The worker
 -- writes the lines and the feed's columns before it sets ended_at, in the same transaction.
-CREATE FUNCTION "player_totals_match_ended"() RETURNS trigger LANGUAGE plpgsql AS $$
+CREATE OR REPLACE FUNCTION "player_totals_match_ended"() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
 	PERFORM player_totals_lock(NEW.server_id);
 	INSERT INTO player_totals AS t (server_id, steam_id, matches, kills, deaths, headshots, team_kills, suicides,
@@ -158,7 +158,7 @@ BEGIN
 END $$;--> statement-breakpoint
 -- An ended match inserted, changed or deleted: the pairs of its lines recounted, on its server
 -- before and after.
-CREATE FUNCTION "player_totals_match_changed"() RETURNS trigger LANGUAGE plpgsql AS $$
+CREATE OR REPLACE FUNCTION "player_totals_match_changed"() RETURNS trigger LANGUAGE plpgsql AS $$
 DECLARE
 	pids text[];
 BEGIN
@@ -175,7 +175,7 @@ END $$;--> statement-breakpoint
 -- Lines of ended matches inserted, changed or deleted (one function per event, as transition
 -- tables require): every pair they touch recounted, a server at a time. The worker only writes
 -- the lines of the match in progress, which these find nothing to do for.
-CREATE FUNCTION "player_totals_lines_inserted"() RETURNS trigger LANGUAGE plpgsql AS $$
+CREATE OR REPLACE FUNCTION "player_totals_lines_inserted"() RETURNS trigger LANGUAGE plpgsql AS $$
 DECLARE
 	s record;
 BEGIN
@@ -189,7 +189,7 @@ BEGIN
 	END LOOP;
 	RETURN NULL;
 END $$;--> statement-breakpoint
-CREATE FUNCTION "player_totals_lines_updated"() RETURNS trigger LANGUAGE plpgsql AS $$
+CREATE OR REPLACE FUNCTION "player_totals_lines_updated"() RETURNS trigger LANGUAGE plpgsql AS $$
 DECLARE
 	s record;
 BEGIN
@@ -205,7 +205,7 @@ BEGIN
 	END LOOP;
 	RETURN NULL;
 END $$;--> statement-breakpoint
-CREATE FUNCTION "player_totals_lines_deleted"() RETURNS trigger LANGUAGE plpgsql AS $$
+CREATE OR REPLACE FUNCTION "player_totals_lines_deleted"() RETURNS trigger LANGUAGE plpgsql AS $$
 DECLARE
 	s record;
 BEGIN
@@ -223,7 +223,7 @@ END $$;--> statement-breakpoint
 -- bulk load ends with (see the top of this file). One insert of both aggregates joined; each match's
 -- result worked out once per side that played it rather than once per line (Postgres runs the
 -- SELECT of an INSERT without parallel workers, so the per-line function calls were most of it).
-CREATE FUNCTION "player_totals_rebuild"() RETURNS void LANGUAGE plpgsql AS $$
+CREATE OR REPLACE FUNCTION "player_totals_rebuild"() RETURNS void LANGUAGE plpgsql AS $$
 BEGIN
 	DELETE FROM player_totals;
 	INSERT INTO player_totals (server_id, steam_id, sessions, seconds, seed_seconds, cash, last_seen,
@@ -261,27 +261,48 @@ BEGIN
 	       COALESCE(l.wins, 0), COALESCE(l.losses, 0), COALESCE(l.draws, 0)
 	  FROM s FULL JOIN l ON l.server_id = s.server_id AND l.steam_id = s.steam_id;
 END $$;--> statement-breakpoint
+DROP TRIGGER IF EXISTS "player_totals_session_closed" ON "player_sessions";--> statement-breakpoint
 CREATE TRIGGER "player_totals_session_closed" BEFORE UPDATE OF "left_at" ON "player_sessions"
 	FOR EACH ROW WHEN (OLD.left_at IS NULL AND NEW.left_at IS NOT NULL) EXECUTE FUNCTION player_totals_session_closed();--> statement-breakpoint
+DROP TRIGGER IF EXISTS "player_totals_session_inserted" ON "player_sessions";--> statement-breakpoint
 CREATE TRIGGER "player_totals_session_inserted" AFTER INSERT ON "player_sessions"
 	FOR EACH ROW WHEN (NEW.left_at IS NOT NULL) EXECUTE FUNCTION player_totals_session_changed();--> statement-breakpoint
+DROP TRIGGER IF EXISTS "player_totals_session_updated" ON "player_sessions";--> statement-breakpoint
 CREATE TRIGGER "player_totals_session_updated" AFTER UPDATE ON "player_sessions"
 	FOR EACH ROW WHEN (OLD.left_at IS NOT NULL) EXECUTE FUNCTION player_totals_session_changed();--> statement-breakpoint
+DROP TRIGGER IF EXISTS "player_totals_session_deleted" ON "player_sessions";--> statement-breakpoint
 CREATE TRIGGER "player_totals_session_deleted" AFTER DELETE ON "player_sessions"
 	FOR EACH ROW WHEN (OLD.left_at IS NOT NULL) EXECUTE FUNCTION player_totals_session_changed();--> statement-breakpoint
+DROP TRIGGER IF EXISTS "player_totals_lines_inserted" ON "match_players";--> statement-breakpoint
 CREATE TRIGGER "player_totals_lines_inserted" AFTER INSERT ON "match_players"
 	REFERENCING NEW TABLE AS lines_new FOR EACH STATEMENT EXECUTE FUNCTION player_totals_lines_inserted();--> statement-breakpoint
+DROP TRIGGER IF EXISTS "player_totals_lines_updated" ON "match_players";--> statement-breakpoint
 CREATE TRIGGER "player_totals_lines_updated" AFTER UPDATE ON "match_players"
 	REFERENCING OLD TABLE AS lines_old NEW TABLE AS lines_new FOR EACH STATEMENT EXECUTE FUNCTION player_totals_lines_updated();--> statement-breakpoint
+DROP TRIGGER IF EXISTS "player_totals_lines_deleted" ON "match_players";--> statement-breakpoint
 CREATE TRIGGER "player_totals_lines_deleted" AFTER DELETE ON "match_players"
 	REFERENCING OLD TABLE AS lines_old FOR EACH STATEMENT EXECUTE FUNCTION player_totals_lines_deleted();--> statement-breakpoint
+DROP TRIGGER IF EXISTS "player_totals_match_ended" ON "matches";--> statement-breakpoint
 CREATE TRIGGER "player_totals_match_ended" BEFORE UPDATE OF "ended_at" ON "matches"
 	FOR EACH ROW WHEN (OLD.ended_at IS NULL AND NEW.ended_at IS NOT NULL) EXECUTE FUNCTION player_totals_match_ended();--> statement-breakpoint
+DROP TRIGGER IF EXISTS "player_totals_match_inserted" ON "matches";--> statement-breakpoint
 CREATE TRIGGER "player_totals_match_inserted" AFTER INSERT ON "matches"
 	FOR EACH ROW WHEN (NEW.ended_at IS NOT NULL) EXECUTE FUNCTION player_totals_match_changed();--> statement-breakpoint
+DROP TRIGGER IF EXISTS "player_totals_match_updated" ON "matches";--> statement-breakpoint
 CREATE TRIGGER "player_totals_match_updated" AFTER UPDATE ON "matches"
 	FOR EACH ROW WHEN (OLD.ended_at IS NOT NULL) EXECUTE FUNCTION player_totals_match_changed();--> statement-breakpoint
+DROP TRIGGER IF EXISTS "player_totals_match_deleted" ON "matches";--> statement-breakpoint
 CREATE TRIGGER "player_totals_match_deleted" AFTER DELETE ON "matches"
 	FOR EACH ROW WHEN (OLD.ended_at IS NOT NULL) EXECUTE FUNCTION player_totals_match_changed();--> statement-breakpoint
 SELECT player_totals_rebuild();--> statement-breakpoint
-ALTER TABLE "player_totals" ADD CONSTRAINT "player_totals_server_id_steam_id_pk" PRIMARY KEY("server_id","steam_id");
+DO $$
+BEGIN
+	IF NOT EXISTS (
+		SELECT 1 FROM pg_constraint
+		 WHERE conrelid = 'player_totals'::regclass
+		   AND contype = 'p'
+	) THEN
+		ALTER TABLE "player_totals"
+			ADD CONSTRAINT "player_totals_server_id_steam_id_pk" PRIMARY KEY("server_id","steam_id");
+	END IF;
+END $$;
