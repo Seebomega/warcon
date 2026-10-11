@@ -12,7 +12,9 @@ import { killsOfMatch } from './matches';
 import {
 	bountyLapse,
 	enabledTriggers,
+	infectionKillEvaluation,
 	killDistanceAct,
+	pruneInfectionMemory,
 	renderTemplate,
 	statsFor,
 	statsOf,
@@ -24,6 +26,7 @@ import {
 import { keptVars, messageVars, serverVars, type MessageVars } from './message-vars';
 import { mapName } from '$lib/format';
 import { countsForTeamKill, MAX_REASON, type TeamKillConfig } from './trigger-rules';
+import type { InfectionConfig } from './infection';
 import { MAX_CHAT } from '$lib/chat';
 import {
 	countsForRate,
@@ -122,6 +125,12 @@ export async function onKillsIngested(
 		if (!(err instanceof LostOwnership))
 			console.warn(`[warcon] bounty rules on ${serverId}:`, publicMessage(err));
 	}
+	try {
+		await actOnInfection(env, serverId, kills);
+	} catch (err) {
+		if (!(err instanceof LostOwnership))
+			console.warn(`[warcon] infection rules on ${serverId}:`, publicMessage(err));
+	}
 	const teamKills = kills.filter((k) => k.teamKill && k.killer);
 	if (!teamKills.length) return;
 	const m = memoryOf(serverId);
@@ -132,6 +141,50 @@ export async function onKillsIngested(
 		if (err instanceof LostOwnership) return;
 		console.warn(`[warcon] team-kill rules on ${serverId}:`, publicMessage(err));
 	}
+}
+
+async function actOnInfection(env: Env, serverId: string, batch: KillView[]): Promise<void> {
+	const rows = (await enabledTriggers(env, serverId)).filter((row) => row.kind === 'infection');
+	pruneInfectionMemory(serverId, new Set(rows.map((row) => row.id)));
+	if (!rows.length) return;
+	const memory = memoryOf(serverId);
+	const players = memory?.players ?? [];
+	const factions = (memory?.status?.scores ?? [])
+		.map((score) => score.name)
+		.filter(Boolean)
+		.slice(0, 3);
+	const kills = batch.map((kill) => ({
+		eventId: kill.eventId,
+		killer: kill.killer ? { steamId: kill.killer.steamId, faction: kill.killer.faction } : null,
+		victim: {
+			steamId: kill.victim.steamId,
+			name: kill.victim.name,
+			faction: kill.victim.faction
+		},
+		teamKill: kill.teamKill,
+		suicide: kill.suicide
+	}));
+	const now = Date.now();
+	const steps = rows.map((row) =>
+		infectionKillEvaluation(
+			row,
+			serverId,
+			row.config as InfectionConfig,
+			kills,
+			players,
+			factions,
+			now
+		)
+	);
+	const intents = steps.flatMap((step) => step.intents);
+	const updates = steps.flatMap((step) => step.updates);
+	if (intents.length)
+		await withOwnedTransaction(env, async (tx) => {
+			await enqueueIntents(tx, serverId, intents);
+			await applyTriggerUpdates(tx, updates);
+		});
+	for (const step of steps) step.commit();
+	if (intents.length) wakeDelivery();
 }
 
 /** Both players of every kill as the feed named them, in the order the game played them; a suicide

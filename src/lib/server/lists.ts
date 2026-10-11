@@ -39,7 +39,6 @@ import {
 import { DEFAULT_BAN_MESSAGE } from '$lib/ban-message';
 import { noteContainsProtectedWord } from './trigger-rules';
 import { banReasonsFor } from './ban-reasons';
-import { noteContainsProtectedWord } from './trigger-rules';
 import { requireSteamId } from './steam';
 import { desiredFor, memberSlots, summaryOf } from './lists-sync';
 import { isListOn } from './lists-plan';

@@ -1,10 +1,10 @@
 -- Migration 0048 preserves existing organisation lists as each kind's default.
 DROP INDEX "lists_org_kind_name_uidx";--> statement-breakpoint
-ALTER TABLE "lists" ADD COLUMN "is_default" boolean DEFAULT false NOT NULL;--> statement-breakpoint
-ALTER TABLE "lists" ADD COLUMN "on_from" timestamp with time zone;--> statement-breakpoint
-ALTER TABLE "lists" ADD COLUMN "on_until" timestamp with time zone;--> statement-breakpoint
-ALTER TABLE "lists" ADD COLUMN "every_server" boolean DEFAULT true NOT NULL;--> statement-breakpoint
-ALTER TABLE "lists" ADD COLUMN "archived_at" timestamp with time zone;--> statement-breakpoint
+ALTER TABLE "lists" ADD COLUMN IF NOT EXISTS "is_default" boolean DEFAULT false NOT NULL;--> statement-breakpoint
+ALTER TABLE "lists" ADD COLUMN IF NOT EXISTS "on_from" timestamp with time zone;--> statement-breakpoint
+ALTER TABLE "lists" ADD COLUMN IF NOT EXISTS "on_until" timestamp with time zone;--> statement-breakpoint
+ALTER TABLE "lists" ADD COLUMN IF NOT EXISTS "every_server" boolean DEFAULT true NOT NULL;--> statement-breakpoint
+ALTER TABLE "lists" ADD COLUMN IF NOT EXISTS "archived_at" timestamp with time zone;--> statement-breakpoint
 -- the org lists there are, one per kind (checked on the hosted panel 2026-10-09), are its defaults
 UPDATE "lists" SET "is_default" = true WHERE "server_id" IS NULL;--> statement-breakpoint
 CREATE UNIQUE INDEX "lists_org_default_uidx" ON "lists" USING btree ("org_id","kind") WHERE "lists"."is_default";--> statement-breakpoint

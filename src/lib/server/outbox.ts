@@ -46,6 +46,7 @@ import {
 	AFK_ROUND_MAX_MS,
 	AFK_ROUND_MAX_PLAYERS
 } from './afk-protection';
+import { INFECTION_WIN } from './infection';
 import { MAX_CHAT } from '$lib/chat';
 import type { OutboxView } from '$lib/types';
 
@@ -323,12 +324,27 @@ function skipReason(row: OutboxRow, m: ReturnType<typeof memoryOf>): string | nu
 	}
 	// A Team balance move for a player already off the side it was decided from: the move before it
 	// landed, or they changed side themselves. Moving someone twice is not harmless.
-	if (row.triggerKind === 'two_teams' && row.action === 'changeTeam') {
+	if (
+		(row.triggerKind === 'two_teams' || row.triggerKind === 'infection') &&
+		row.action === 'changeTeam'
+	) {
 		const from = (row.params as { from?: string } | null)?.from;
 		const p = m.players.find((q) => q.steamId === row.steamId);
 		if (from && p && p.faction !== from) return `Already off ${from}.`;
-		const verdict = twoTeamsMoveVerdict(row);
-		if (verdict !== 'send' && verdict !== 'wait') return verdict;
+		if (row.triggerKind === 'two_teams') {
+			const verdict = twoTeamsMoveVerdict(row);
+			if (verdict !== 'send' && verdict !== 'wait') return verdict;
+		}
+	}
+	if (row.action === INFECTION_WIN) {
+		if (age > 30_000) return `Stale (${Math.round(age / 1000)}s old).`;
+		const faction = (row.params as { faction?: unknown } | null)?.faction;
+		if (
+			typeof faction !== 'string' ||
+			m.players.length < 2 ||
+			m.players.some((player) => player.faction !== faction)
+		)
+			return 'A faction no longer has every player.';
 	}
 	return null;
 }
@@ -358,7 +374,9 @@ function mustWait(row: OutboxRow, m: ReturnType<typeof memoryOf>): boolean {
  */
 const movesSent = new Map<string, number>();
 const moveOf = (row: OutboxRow) =>
-	row.triggerKind === 'two_teams' && row.action === 'changeTeam' && row.steamId
+	(row.triggerKind === 'two_teams' || row.triggerKind === 'infection') &&
+	row.action === 'changeTeam' &&
+	row.steamId
 		? `${row.serverId}:${row.steamId}`
 		: null;
 
@@ -960,6 +978,7 @@ async function afkRound(
 async function execute(client: WardogsClient, row: OutboxRow): Promise<unknown> {
 	const params = (row.params as Record<string, unknown>) ?? {};
 	if (row.action === AFK_ROUND) return afkRound(client, params, memoryOf(row.serverId));
+	if (row.action === INFECTION_WIN) return ACTIONS.endMatch.run(client, {});
 	if (row.action === RULE_KILL) return killAndTell(client, params);
 	if (row.action === ROTATION_SHUFFLE) return shuffleOnServer(client, params);
 	if (row.action === 'empty_reset') {

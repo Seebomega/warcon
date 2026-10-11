@@ -157,6 +157,7 @@ const ACTION_TITLES: Record<string, string> = {
 	'trigger.name_filter': 'Trigger · name filter',
 	'trigger.kill_rate': 'Trigger · kill rate watch',
 	'trigger.two_teams': 'Trigger · team balance',
+	'trigger.infection': 'Trigger · infection',
 	'trigger.kill_distance': 'Trigger · kill distance watch',
 	'trigger.afk_protection': 'Trigger · AFK protection',
 	'trigger.name_change': 'Trigger · name change watch',

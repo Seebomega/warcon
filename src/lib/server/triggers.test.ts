@@ -135,6 +135,11 @@ describe('validateConfig', () => {
 			durationSeconds: 30
 		});
 	});
+
+	test('infection always converts on the third counted death', () => {
+		expect(validateConfig('infection', {})).toEqual({ deaths: 3 });
+		expect(validateConfig('infection', { deaths: 99 })).toEqual({ deaths: 3 });
+	});
 	test('seed_reward needs a seed time that fits its window, and fills in the rest', () => {
 		expect(() => validateConfig('seed_reward', {})).toThrow('minutes');
 		expect(() => validateConfig('seed_reward', { minutes: 60 * 24 * 8, windowDays: 7 })).toThrow(

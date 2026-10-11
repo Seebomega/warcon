@@ -877,6 +877,8 @@
 					exempt: f.exempt.split(/[\s,]+/).filter(Boolean),
 					watchOnly: f.watchOnly
 				};
+			case 'infection':
+				return {};
 			case 'afk_protection':
 				return {
 					everyMinutes: Number(f.everyMinutes),
@@ -1120,6 +1122,8 @@
 					.filter(Boolean)
 					.join(' · ');
 			}
+			case 'infection':
+				return '3 counted deaths convert a player · three teams spread evenly · factions locked · last faction wins';
 			case 'afk_protection':
 				return `kill everyone every ${c.everyMinutes} min while fewer than ${c.stopAt} are on and no side has scored · then off until the server empties or restarts${c.message ? ' · with a broadcast' : ''}${c.doneMessage ? ' · thanks at the start' : ''}`;
 			case 'bounty': {
@@ -2158,6 +2162,30 @@
 						or below, is unavailable, the player leaves, or the player list cannot be sampled on
 						time.
 					</p>
+				{:else if f.kind === 'infection'}
+					<div class="space-y-3 text-[13px]">
+						<div class="callout border-l-accent">
+							<p class="font-semibold text-mist-100">Three-team Infection</p>
+							<p class="mt-1 text-mist-400">
+								Joiners are placed on the least-populated of Lonestar, Valkyra and Manticore. Their
+								faction is then locked; a manual switch is reverted.
+							</p>
+						</div>
+						<p>
+							After three counted deaths, a player joins the faction that killed them most and their
+							counter starts again at zero. A tie is decided by the faction that dealt the third
+							death.
+						</p>
+						<p class="text-mist-400">
+							Team kills, suicides and deaths without an attributed killer do not count. The first
+							faction containing every player wins and ends the match. Enabling the mode mid-match
+							locks the current teams; spreading starts with joiners and at the next match.
+						</p>
+						<p class="note">
+							Infection and Team balance are exclusive because both control factions. This mode
+							requires Move players and Match control.
+						</p>
+					</div>
 				{:else if f.kind === 'two_teams'}
 					<fieldset class="space-y-2 text-[13px]">
 						<legend class="field-label">Balance</legend>

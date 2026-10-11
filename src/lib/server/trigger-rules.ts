@@ -7,6 +7,7 @@ import { validateNameFilter, type NameFilterConfig } from './name-filter';
 import { validateKillRate, type KillRateConfig } from './kill-rate';
 import { validateKillDistance, type KillDistanceConfig } from './kill-distance';
 import { validateTwoTeams, type TwoTeamsConfig } from './two-teams';
+import { INFECTION_DEATHS, type InfectionConfig } from './infection';
 import { validateAfkProtection, type AfkProtectionConfig } from './afk-protection';
 import { validateNameChange, type NameChangeConfig } from './name-change';
 import { validateBounty, type BountyConfig } from './bounty';
@@ -36,6 +37,7 @@ export const TRIGGER_KINDS: TriggerKind[] = [
 	'name_filter',
 	'kill_rate',
 	'two_teams',
+	'infection',
 	'kill_distance',
 	'afk_protection',
 	'name_change',
@@ -57,6 +59,7 @@ export const TRIGGER_LABELS: Record<TriggerKind, string> = {
 	name_filter: 'Name filter',
 	kill_rate: 'Kill rate watch',
 	two_teams: 'Team balance',
+	infection: 'Infection',
 	kill_distance: 'Kill distance watch',
 	afk_protection: 'AFK protection',
 	name_change: 'Name change watch',
@@ -234,6 +237,7 @@ export type TriggerConfig =
 	| NameFilterConfig
 	| KillRateConfig
 	| TwoTeamsConfig
+	| InfectionConfig
 	| KillDistanceConfig
 	| AfkProtectionConfig
 	| NameChangeConfig
@@ -428,6 +432,8 @@ export function validateConfig(kind: TriggerKind, raw: unknown): TriggerConfig {
 			return validateKillRate(c);
 		case 'two_teams':
 			return validateTwoTeams(c);
+		case 'infection':
+			return { deaths: INFECTION_DEATHS };
 		case 'kill_distance':
 			return validateKillDistance(c);
 		case 'afk_protection':

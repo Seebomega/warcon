@@ -1,1 +1,1 @@
-ALTER TABLE "webhooks" ADD COLUMN "trigger_kinds" jsonb;
+ALTER TABLE "webhooks" ADD COLUMN IF NOT EXISTS "trigger_kinds" jsonb;

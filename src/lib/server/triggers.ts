@@ -16,6 +16,8 @@
 //                or across the org
 //   two_teams    close one faction and move its players to the smaller of the other two
 //                (two-teams.ts)
+//   infection    spread three factions, lock them, and convert players after three enemy deaths
+//                (infection.ts; deaths are acted on in feed-events.ts)
 //   kill_distance  flag, warn, kill, kick or ban a player who kills with a chosen weapon or
 //                vehicle, from further than it reaches or from any distance (kill-distance.ts,
 //                acted on in feed-events.ts)
@@ -215,6 +217,15 @@ import {
 	type StatsBy
 } from './message-vars';
 import { seedProgress } from './seed-progress';
+import {
+	INFECTION_WIN,
+	infectionKillStep,
+	infectionObserveStep,
+	infectionSettingsKey,
+	type InfectionConfig,
+	type InfectionKill,
+	type InfectionState
+} from './infection';
 
 export * from './trigger-rules';
 
@@ -306,6 +317,7 @@ const RULE_NEEDS: Record<
 	team_kill: ['players.kick', 'kicks players'],
 	kill_rate: ['players.kick', 'flags players'],
 	two_teams: ['players.move', 'moves players between teams'],
+	infection: ['players.move', 'moves players between teams'],
 	afk_protection: ['players.kill', 'kills players'],
 	name_change: ['players.kick', 'flags or kicks players'],
 	rotation_shuffle: ['config.apply', 'rewrites the rotation in the config document'],
@@ -353,6 +365,8 @@ function ruleAlsoNeeds(kind: TriggerKind, config: unknown): [Capability, string]
 		return ['chat.send', 'messages players'];
 	if (kind === 'two_teams' && str((config as Partial<TwoTeamsConfig> | null)?.message))
 		return ['chat.send', 'whispers players'];
+	if (kind === 'infection')
+		return ['match.control', 'ends the match when one faction has everyone'];
 	const afk = config as Partial<AfkProtectionConfig> | null;
 	if (kind === 'afk_protection' && (str(afk?.message) || str(afk?.doneMessage)))
 		return ['chat.send', 'messages players'];
@@ -395,14 +409,23 @@ export async function createTrigger(
 		if (ONE_PER_SERVER.includes(kind)) {
 			await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${`triggers:${server.id}`}))`);
 			const [other] = await tx
-				.select({ name: triggers.name })
+				.select({ name: triggers.name, kind: triggers.kind })
 				.from(triggers)
-				.where(and(eq(triggers.serverId, server.id), eq(triggers.kind, kind)))
+				.where(
+					and(
+						eq(triggers.serverId, server.id),
+						kind === 'two_teams' || kind === 'infection'
+							? inArray(triggers.kind, ['two_teams', 'infection'])
+							: eq(triggers.kind, kind)
+					)
+				)
 				.limit(1);
 			if (other)
 				throw new ApiError(
 					409,
-					`This server already has a ${TRIGGER_LABELS[kind]} rule ("${other.name}"); edit that one instead.`,
+					other.kind !== kind
+						? `This server already has the ${TRIGGER_LABELS[other.kind]} team mode ("${other.name}"); switch or remove it before adding ${TRIGGER_LABELS[kind]}.`
+						: `This server already has a ${TRIGGER_LABELS[kind]} rule ("${other.name}"); edit that one instead.`,
 					'duplicate'
 				);
 		}
@@ -464,7 +487,7 @@ export async function updateTrigger(
 	// emptied or restarted while the rule was off is unknown. An edit keeps where it stands, so
 	// changing a message while a match is on cannot turn it on.
 	const switchOn =
-		row.kind === 'two_teams' && set.enabled === true
+		(row.kind === 'two_teams' || row.kind === 'infection') && set.enabled === true
 			? sql`CASE WHEN ${triggers.enabled} THEN ${triggers.state} ELSE (${JSON.stringify({ enabledAt: Date.now() })}::text)::jsonb END`
 			: (row.kind === 'afk_protection' ||
 						(row.kind === 'rotation_shuffle' && set.state === undefined)) &&
@@ -543,6 +566,7 @@ export async function deleteTrigger(
  */
 export const SETTINGS_KEYS: Partial<Record<string, (config: unknown) => string>> = {
 	two_teams: (c) => twoTeamsSettingsKey(c as TwoTeamsConfig),
+	infection: (c) => infectionSettingsKey(c as InfectionConfig),
 	kill_distance: (c) => killDistanceSettingsKey(c as KillDistanceConfig),
 	afk_protection: (c) => afkSettingsKey(c as AfkProtectionConfig),
 	name_change: (c) => nameChangeSettingsKey(c as NameChangeConfig)
@@ -845,6 +869,9 @@ export async function evaluateTriggers(
 					break;
 				case 'two_teams':
 					await evalTwoTeams(ctx, row, row.config as TwoTeamsConfig, out, read);
+					break;
+				case 'infection':
+					evalInfection(ctx, row, row.config as InfectionConfig, out);
 					break;
 				case 'afk_protection':
 					evalAfkProtection(ctx, row, row.config as AfkProtectionConfig, out);
@@ -1428,6 +1455,172 @@ async function evalTwoTeams(
 		});
 }
 
+/** Infection keeps its faction locks and death counters in the worker, like Team balance's sides. */
+const infectionMemory = new Map<
+	string,
+	{ serverId: string; key: string; state: InfectionState; newMatch: boolean }
+>();
+
+function infectionEntry(
+	row: TriggerRow,
+	serverId: string,
+	cfg: InfectionConfig,
+	players: Player[],
+	factions: string[],
+	now: number,
+	reset = false
+) {
+	const key = `${infectionSettingsKey(cfg)}:${JSON.stringify(row.state ?? null)}`;
+	let memory = infectionMemory.get(row.id);
+	if (!memory || memory.key !== key || reset) {
+		// A feed batch can be the first thing seen after a worker starts. Seed from the current roster
+		// without moving it, just as enabling the mode during an existing match does.
+		const state = infectionObserveStep(null, players, factions, now, 0).state;
+		memory = { serverId, key, state, newMatch: false };
+		infectionMemory.set(row.id, memory);
+	}
+	return memory;
+}
+
+export function pruneInfectionMemory(serverId: string, live: Set<string>): void {
+	for (const [id, memory] of infectionMemory)
+		if (memory.serverId === serverId && !live.has(id)) infectionMemory.delete(id);
+}
+
+/** Apply one kill-feed batch to an Infection rule; the caller commits `state` after its DB write. */
+export function infectionKillEvaluation(
+	row: TriggerRow,
+	serverId: string,
+	cfg: InfectionConfig,
+	kills: InfectionKill[],
+	players: Player[],
+	factions: string[],
+	now: number
+): { intents: Intent[]; updates: TriggerUpdate[]; commit: () => void } {
+	const memory = infectionEntry(row, serverId, cfg, players, factions, now);
+	const step = infectionKillStep(cfg, memory.state, kills, now);
+	const rule = infectionSettingsKey(cfg);
+	const intents = step.moves.map<Intent>((move) => ({
+		trigger: row,
+		action: 'changeTeam',
+		params: {
+			steamId: move.steamId,
+			faction: move.to,
+			kill: false,
+			from: move.from,
+			rule
+		},
+		target: move.steamId,
+		okMessage: `Infected ${move.name}: moved to ${move.to}.`,
+		detail: { name: move.name, from: move.from, to: move.to, why: move.why },
+		steamId: move.steamId,
+		dedupeKey: key(row, move.steamId, 'infected', move.eventId ?? now)
+	}));
+	const updates: TriggerUpdate[] = intents.length
+		? [
+				{
+					id: row.id,
+					lastFiredAt: new Date(now),
+					lastResult:
+						intents.length === 1
+							? intents[0].okMessage.replace(/\.$/, '')
+							: `Infecting ${intents.length} players`
+				}
+			]
+		: [];
+	return { intents, updates, commit: () => (memory.state = step.state) };
+}
+
+function evalInfection(
+	ctx: TickContext,
+	row: TriggerRow,
+	cfg: InfectionConfig,
+	out: Evaluation
+): void {
+	const now = ctx.ts.getTime();
+	const factions = (ctx.status.scores ?? [])
+		.map((score) => score.name)
+		.filter(Boolean)
+		.slice(0, 3);
+	const memory = infectionEntry(
+		row,
+		ctx.server.id,
+		cfg,
+		ctx.players,
+		factions,
+		now,
+		!!ctx.recovered
+	);
+	// A match end can arrive with the old roster. Hold the boundary until the first player-list look
+	// for the next round, as Team balance does, so we do not reshuffle the match that just ended.
+	if (ctx.matchEnd) memory.newMatch = true;
+	if (!ctx.playersObserved) return;
+	const perLook = Math.min(
+		TWO_TEAMS_MAX_MOVES_PER_LOOK,
+		Math.max(
+			1,
+			Math.floor((TWO_TEAMS_MOVES_PER_SECOND * Math.max(ctx.playersIntervalMs, 1000)) / 1000)
+		)
+	);
+	const step = infectionObserveStep(
+		memory.state,
+		ctx.players,
+		factions,
+		now,
+		perLook,
+		memory.newMatch
+	);
+	const rule = infectionSettingsKey(cfg);
+	for (const move of step.moves)
+		out.intents.push({
+			trigger: row,
+			action: 'changeTeam',
+			params: {
+				steamId: move.steamId,
+				faction: move.to,
+				kill: false,
+				from: move.from,
+				rule
+			},
+			target: move.steamId,
+			okMessage:
+				move.why === 'lock'
+					? `Returned ${move.name} to ${move.to}.`
+					: `Placed ${move.name} on ${move.to}.`,
+			detail: { name: move.name, from: move.from, to: move.to, why: move.why },
+			steamId: move.steamId,
+			dedupeKey: key(row, move.steamId, move.why, now)
+		});
+	if (step.winner)
+		out.intents.push({
+			trigger: row,
+			action: INFECTION_WIN,
+			params: { faction: step.winner, rule },
+			target: step.winner,
+			okMessage: `${step.winner} won Infection.`,
+			detail: { faction: step.winner, players: ctx.players.length },
+			steamId: null,
+			dedupeKey: key(row, 'winner', step.winner, now)
+		});
+	const consumedNewMatch = memory.newMatch && factions.length >= 3;
+	(out.afterCommit ??= []).push(() => {
+		memory.state = step.state;
+		if (consumedNewMatch) memory.newMatch = false;
+	});
+	if (step.winner || step.moves.length)
+		out.updates.push({
+			id: row.id,
+			lastFiredAt: ctx.ts,
+			lastResult: step.winner
+				? `${step.winner} has every player; ending the match`
+				: step.moves.length === 1
+					? step.moves[0].why === 'lock'
+						? `Returning ${step.moves[0].name} to ${step.moves[0].to}`
+						: `Placing ${step.moves[0].name} on ${step.moves[0].to}`
+					: `Moving ${step.moves.length} players`
+		});
+}
+
 function evalRestartNotice(
 	ctx: TickContext,
 	row: TriggerRow,
@@ -1709,6 +1902,7 @@ export function forgetRuleMemory(): void {
 	matchHeld.clear();
 	seedState.clear();
 	twoTeamsMemory.clear();
+	infectionMemory.clear();
 	staffMoves.clear();
 	afkEmpty.clear();
 	forgetBounties();
@@ -2219,6 +2413,12 @@ export async function dryRun(
 	if (kind === 'two_teams') {
 		result.notes.push(
 			'Faction moves are not kept in the session history, so there is nothing to replay. Switch on Watch only to see live what the rule would move, under Actions, without moving anyone.'
+		);
+		return result;
+	}
+	if (kind === 'infection') {
+		result.notes.push(
+			'Faction switches are not kept in the session history, so Infection cannot be replayed. The live rule counts enemy-attributed deaths from the event feed, locks factions, and spreads joiners across all three teams.'
 		);
 		return result;
 	}

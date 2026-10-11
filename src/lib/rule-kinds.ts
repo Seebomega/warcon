@@ -112,6 +112,12 @@ export const RULE_KINDS: { kind: TriggerKind; group: RuleGroup; label: string; b
 		blurb: 'Keep the sides even, and close a faction to play two teams.'
 	},
 	{
+		kind: 'infection',
+		group: 'Server',
+		label: 'Infection',
+		blurb: 'Spread three teams, convert players after three deaths, and lock their faction.'
+	},
+	{
 		kind: 'empty_reset',
 		group: 'Server',
 		label: 'Empty-server map reset',
@@ -142,6 +148,7 @@ export const RULE_KINDS: { kind: TriggerKind; group: RuleGroup; label: string; b
 export const ONE_PER_SERVER: TriggerKind[] = [
 	'seed_reward',
 	'two_teams',
+	'infection',
 	'afk_protection',
 	'bounty',
 	'rotation_shuffle',
@@ -153,7 +160,7 @@ export const ONE_PER_SERVER: TriggerKind[] = [
  * start, an AFK protection round every few minutes while a server seeds): Discord hears only of
  * those that fail (webhook-delivery.ts).
  */
-export const FAILURES_ONLY: TriggerKind[] = ['two_teams', 'afk_protection'];
+export const FAILURES_ONLY: TriggerKind[] = ['two_teams', 'infection', 'afk_protection'];
 
 /**
  * Rules that queue no actions, so a Discord webhook has nothing of theirs to carry: the Live server

@@ -849,6 +849,7 @@ export const triggers = pgTable(
 				'name_filter',
 				'kill_rate',
 				'two_teams',
+				'infection',
 				'kill_distance',
 				'afk_protection',
 				'name_change',
